@@ -136,6 +136,27 @@ static server_t *new_server(int fd);
 
 static struct cork_dllist connections;
 
+// for packet dump
+#ifdef HAVE_PCRE_H
+#include <pcre.h>
+#elif HAVE_PCRE_PCRE_H
+#include <pcre/pcre.h>
+#endif
+static pcre *g_dump_host_pattern = NULL;
+static const char *g_dump_to = NULL;
+static unsigned long g_dump_seq = 0;
+
+static void dump_packet(remote_t * const remote, const size_t size, const char flag) {
+    if (remote->dumpFd) {
+        if (flag == remote->dumpLast) {
+            fprintf(remote->dumpFd, "%lu ", size);
+        } else {
+            fprintf(remote->dumpFd, "%c %lu ", flag, size);
+            remote->dumpLast = flag;
+        }
+    }
+}
+
 int
 setnonblocking(int fd)
 {
@@ -387,6 +408,9 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                     int s = sendto(remote->fd, remote->buf->data, remote->buf->len, MSG_FASTOPEN,
                                    (struct sockaddr *)&(remote->addr), remote->addr_len);
 #endif
+                    if (s > 0) {
+                        dump_packet(remote, s, 'u');
+                    }
                     if (s == -1) {
                         if (errno == CONNECT_IN_PROGRESS) {
                             // in progress, wait until connected
@@ -437,6 +461,9 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 }
             } else {
                 int s = send(remote->fd, remote->buf->data, remote->buf->len, 0);
+                if (s > 0) {
+                    dump_packet(remote, s, 'u');
+                }
                 if (s == -1) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
                         // no data, wait for send
@@ -579,7 +606,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 memcpy(abuf->data + abuf->len, buf->data + 4, in_addr_len + 2);
                 abuf->len += in_addr_len + 2;
 
-                if (acl || verbose) {
+                if (acl || verbose || g_dump_host_pattern) {
                     uint16_t p = ntohs(*(uint16_t *)(buf->data + 4 + in_addr_len));
                     dns_ntop(AF_INET, (const void *)(buf->data + 4),
                              ip, INET_ADDRSTRLEN);
@@ -595,7 +622,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 memcpy(abuf->data + abuf->len, buf->data + 4 + 1, name_len + 2);
                 abuf->len += name_len + 2;
 
-                if (acl || verbose) {
+                if (acl || verbose || g_dump_host_pattern) {
                     uint16_t p =
                         ntohs(*(uint16_t *)(buf->data + 4 + 1 + name_len));
                     memcpy(host, buf->data + 4 + 1, name_len);
@@ -611,7 +638,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 memcpy(abuf->data + abuf->len, buf->data + 4, in6_addr_len + 2);
                 abuf->len += in6_addr_len + 2;
 
-                if (acl || verbose) {
+                if (acl || verbose || g_dump_host_pattern) {
                     uint16_t p = ntohs(*(uint16_t *)(buf->data + 4 + in6_addr_len));
                     dns_ntop(AF_INET6, (const void *)(buf->data + 4),
                              ip, INET6_ADDRSTRLEN);
@@ -749,6 +776,21 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                     close_and_free_server(EV_A_ server);
                     return;
                 }
+
+                // init packet dump
+                if (g_dump_host_pattern != NULL) {
+                    if (pcre_exec(g_dump_host_pattern, NULL,
+                      host, strlen(host), 0, 0, NULL, 0) >= 0) {
+                        char filePath[PATH_MAX];
+                        sprintf(filePath, "%s/%010lu_%s_%s.dump", g_dump_to, g_dump_seq++, host, port);
+                        FILE *dumpFd = fopen(filePath, "w");
+                        if (dumpFd == NULL) {
+                            LOGE("Unable to create packet dump file %s.", filePath);
+                        }
+                        remote->dumpFd = dumpFd;
+                        remote->dumpLast = ' ';
+                    }
+                }
             }
 
             if (buf->len > 0) {
@@ -869,6 +911,8 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 
     server->buf->len = r;
 
+    dump_packet(remote, r, 'd');
+
     if (!remote->direct) {
 #ifdef ANDROID
         rx += server->buf->len;
@@ -955,6 +999,10 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
         // has data to send
         ssize_t s = send(remote->fd, remote->buf->data + remote->buf->idx,
                          remote->buf->len, 0);
+
+        if (s > 0) {
+            dump_packet(remote, s, 'u');
+        }
         if (s == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 ERROR("remote_send_cb_send");
@@ -1017,6 +1065,10 @@ free_remote(remote_t *remote)
     if (remote->buf != NULL) {
         bfree(remote->buf);
         ss_free(remote->buf);
+    }
+    if (remote->dumpFd != NULL) {
+        fclose(remote->dumpFd);
+        remote->dumpFd = NULL;
     }
     ss_free(remote->recv_ctx);
     ss_free(remote->send_ctx);
@@ -1239,6 +1291,8 @@ main(int argc, char **argv)
     char *pid_path   = NULL;
     char *conf_path  = NULL;
     char *iface      = NULL;
+    char *dump_host  = NULL;
+    char *dump_to    = NULL;
 
     char *plugin      = NULL;
     char *plugin_opts = NULL;
@@ -1263,6 +1317,8 @@ main(int argc, char **argv)
         { "password",    required_argument, NULL, GETOPT_VAL_PASSWORD },
         { "key",         required_argument, NULL, GETOPT_VAL_KEY },
         { "help",        no_argument,       NULL, GETOPT_VAL_HELP },
+        { "dump",        required_argument, NULL, GETOPT_VAL_DUMP },
+        { "dump-to",     required_argument, NULL, GETOPT_VAL_DUMP_DIR },
         { NULL,          0,                 NULL, 0 }
     };
 
@@ -1304,6 +1360,12 @@ main(int argc, char **argv)
             break;
         case GETOPT_VAL_REUSE_PORT:
             reuse_port = 1;
+            break;
+        case GETOPT_VAL_DUMP:
+            dump_host = optarg;
+            break;
+        case GETOPT_VAL_DUMP_DIR:
+            dump_to = optarg;
             break;
         case 's':
             if (remote_num < MAX_REMOTE_NUM) {
@@ -1529,6 +1591,22 @@ main(int argc, char **argv)
         if (err) {
             FATAL("failed to start the plugin");
         }
+    }
+
+    if (dump_host != NULL && dump_to != NULL) {
+        const char *reerr;
+        int reerroffset;
+
+        g_dump_host_pattern =
+            pcre_compile(dump_host, 0, &reerr, &reerroffset, NULL);
+        if (g_dump_host_pattern == NULL) {
+            LOGE("Regex compilation of \"%s\" failed: %s, offset %d",
+                 dump_host, reerr, reerroffset);
+            FATAL("failed to initialize packet dump");
+        }
+
+        g_dump_to = dump_to;
+        LOGI("Dump: %s, %s", dump_host, g_dump_to);
     }
 
     // ignore SIGPIPE

@@ -357,6 +357,12 @@ usage()
     printf(
         "       [--acl <acl_file>]         Path to ACL (Access Control List).\n");
 #endif
+#ifdef MODULE_LOCAL
+    printf(
+        "       [--dump <host_pattern>]    Dump packet size for matching host.\n");
+    printf(
+        "       [--dump_to <dir>]          Target directory for dump files.\n");
+#endif
 #if defined(MODULE_REMOTE) || defined(MODULE_MANAGER)
     printf(
         "       [--manager-address <addr>] UNIX domain socket address.\n");
