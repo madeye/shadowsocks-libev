@@ -966,6 +966,8 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
     remote_t *remote              = remote_send_ctx->remote;
     server_t *server              = remote->server;
 
+    int random_send = 0;
+
     if (!remote_send_ctx->connected) {
         struct sockaddr_storage addr;
         socklen_t len = sizeof addr;
@@ -989,6 +991,8 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
             close_and_free_server(EV_A_ server);
             return;
         }
+
+        random_send = remote->buf->len - (rand() % (remote->buf->len / 3));
     }
 
     if (remote->buf->len == 0) {
@@ -998,8 +1002,11 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
         return;
     } else {
         // has data to send
+        if (random_send == 0) {
+            random_send = remote->buf->len;
+        }
         ssize_t s = send(remote->fd, remote->buf->data + remote->buf->idx,
-                         remote->buf->len, 0);
+                         random_send, 0);
         if (s > 0) {
             dump_packet(remote, s, 'u');
         }
