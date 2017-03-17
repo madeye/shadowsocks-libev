@@ -779,8 +779,9 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 
                 // init packet dump
                 if (g_dump_host_pattern != NULL) {
-                    if (pcre_exec(g_dump_host_pattern, NULL,
-                      host, strlen(host), 0, 0, NULL, 0) >= 0) {
+                    /* if (pcre_exec(g_dump_host_pattern, NULL, */
+                    /*   host, strlen(host), 0, 0, NULL, 0) >= 0) { */
+                    {
                         char filePath[PATH_MAX];
                         sprintf(filePath, "%s/%010lu_%s_%s.dump", g_dump_to, g_dump_seq++, host, port);
                         FILE *dumpFd = fopen(filePath, "w");
@@ -999,7 +1000,6 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
         // has data to send
         ssize_t s = send(remote->fd, remote->buf->data + remote->buf->idx,
                          remote->buf->len, 0);
-
         if (s > 0) {
             dump_packet(remote, s, 'u');
         }
