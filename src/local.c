@@ -992,7 +992,7 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
             return;
         }
 
-        random_send = remote->buf->len - (rand() % (remote->buf->len / 3));
+        random_send = remote->buf->len - (rand() % (remote->buf->len / 2));
     }
 
     if (remote->buf->len == 0) {
