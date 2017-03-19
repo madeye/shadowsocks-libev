@@ -356,6 +356,8 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         return; // Wait for more
     }
 
+    if (server->buf->len == 0) return;
+
     int s = send(server->fd, server->buf->data, server->buf->len, 0);
 
     if (s == -1) {

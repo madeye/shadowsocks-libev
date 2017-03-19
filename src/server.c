@@ -709,6 +709,10 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
+    if (buf->len == 0) {
+        return;
+    }
+
     // handshake and transmit data
     if (server->stage == STAGE_STREAM) {
         int s = send(remote->fd, remote->buf->data, remote->buf->len, 0);

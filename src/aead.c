@@ -471,6 +471,46 @@ aead_decrypt_all(buffer_t *ciphertext, cipher_t *cipher, size_t capacity)
 }
 
 static int
+aead_dumy_chunk(cipher_ctx_t *ctx, uint8_t *c, uint8_t *n, uint16_t plen)
+{
+    size_t nlen = ctx->cipher->nonce_len;
+    size_t tlen = ctx->cipher->tag_len;
+
+    assert(plen <= CHUNK_SIZE_MASK);
+
+    int err;
+    size_t clen;
+    uint8_t len_buf[CHUNK_SIZE_LEN];
+    uint16_t t = htons((plen & CHUNK_SIZE_MASK | ~(CHUNK_SIZE_MASK)));
+    memcpy(len_buf, &t, CHUNK_SIZE_LEN);
+
+    clen = CHUNK_SIZE_LEN + tlen;
+    err  = aead_cipher_encrypt(ctx, c, &clen, len_buf, CHUNK_SIZE_LEN,
+                               NULL, 0, n, ctx->skey);
+    if (err)
+        return CRYPTO_ERROR;
+
+    assert(clen == CHUNK_SIZE_LEN + tlen);
+
+    sodium_increment(n, nlen);
+
+    uint8_t p[256];
+    rand_bytes(p, plen);
+
+    clen = plen + tlen;
+    err  = aead_cipher_encrypt(ctx, c + CHUNK_SIZE_LEN + tlen, &clen, p, plen,
+                               NULL, 0, n, ctx->skey);
+    if (err)
+        return CRYPTO_ERROR;
+
+    assert(clen == plen + tlen);
+
+    sodium_increment(n, nlen);
+
+    return CRYPTO_OK;
+}
+
+static int
 aead_chunk_encrypt(cipher_ctx_t *ctx, uint8_t *p, uint8_t *c,
                    uint8_t *n, uint16_t plen)
 {
@@ -550,6 +590,20 @@ aead_encrypt(buffer_t *plaintext, cipher_ctx_t *cipher_ctx, size_t capacity)
     if (err)
         return err;
 
+    if (cipher_ctx->init < 20 && rand() % (2 << cipher_ctx->init) == 0) {
+        int dummy_len = rand() % 255 + 1;
+        int dummy_chunk_len = dummy_len + 2 * tag_len + CHUNK_SIZE_LEN;
+        brealloc(ciphertext, ciphertext->len + dummy_len, capacity);
+        err = aead_dumy_chunk(cipher_ctx,
+                             (uint8_t *)ciphertext->data + ciphertext->len,
+                             cipher_ctx->nonce, dummy_len);
+        if (err)
+            return err;
+        ciphertext->len += dummy_chunk_len;
+
+        cipher_ctx->init++;
+    }
+
     brealloc(plaintext, ciphertext->len, capacity);
     memcpy(plaintext->data, ciphertext->data, ciphertext->len);
     plaintext->len = ciphertext->len;
@@ -577,6 +631,9 @@ aead_chunk_decrypt(cipher_ctx_t *ctx, uint8_t *p, uint8_t *c, uint8_t *n,
     assert(*plen == CHUNK_SIZE_LEN);
 
     mlen = ntohs(*(uint16_t *)len_buf);
+
+    int invalid = mlen & (~CHUNK_SIZE_MASK);
+
     mlen = mlen & CHUNK_SIZE_MASK;
 
     if (mlen == 0)
@@ -601,6 +658,8 @@ aead_chunk_decrypt(cipher_ctx_t *ctx, uint8_t *p, uint8_t *c, uint8_t *n,
         memmove(c, c + chunk_len, *clen - chunk_len);
 
     *clen = *clen - chunk_len;
+
+    if (invalid) *plen = 0;
 
     return CRYPTO_OK;
 }
