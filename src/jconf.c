@@ -152,6 +152,154 @@ parse_dscp(char *str)
     return DSCP_DEFAULT;
 }
 
+void
+parse_object(json_value *obj, jconf_t *conf)
+{
+    unsigned int i, j;
+    for (i = 0; i < obj->u.object.length; i++) {
+        char *name        = obj->u.object.values[i].name;
+        json_value *value = obj->u.object.values[i].value;
+        if (strcmp(name, "server") == 0) {
+            if (value->type == json_array) {
+                for (j = 0; j < value->u.array.length; j++) {
+                    if (j >= MAX_REMOTE_NUM) {
+                        break;
+                    }
+                    json_value *v  = value->u.array.values[j];
+                    char *addr_str = to_string(v);
+                    parse_addr(addr_str, conf->remote_addr + j);
+                    ss_free(addr_str);
+                    conf->remote_num = j + 1;
+                }
+            } else if (value->type == json_string) {
+                parse_addr(to_string(value), conf->remote_addr);
+                conf->remote_num = 1;
+            }
+        } else if (strcmp(name, "port_password") == 0) {
+            if (value->type == json_object) {
+                for (j = 0; j < value->u.object.length; j++) {
+                    if (j >= MAX_PORT_NUM) {
+                        break;
+                    }
+                    json_value *v = value->u.object.values[j].value;
+                    if (v->type == json_string) {
+                        conf->port_password[j].port = ss_strndup(value->u.object.values[j].name,
+                                value->u.object.values[j].name_length);
+                        conf->port_password[j].password = to_string(v);
+                        conf->port_password_num         = j + 1;
+                    }
+                }
+            }
+        } else if (strcmp(name, "server_port") == 0) {
+            conf->remote_port = to_string(value);
+        } else if (strcmp(name, "local_address") == 0) {
+            conf->local_addr = to_string(value);
+        } else if (strcmp(name, "local_ipv4_address") == 0) {
+            conf->local_addr_v4 = to_string(value);
+        } else if (strcmp(name, "local_ipv6_address") == 0) {
+            conf->local_addr_v6 = to_string(value);
+        } else if (strcmp(name, "local_port") == 0) {
+            conf->local_port = to_string(value);
+        } else if (strcmp(name, "password") == 0) {
+            conf->password = to_string(value);
+        } else if (strcmp(name, "key") == 0) {
+            conf->key = to_string(value);
+        } else if (strcmp(name, "method") == 0) {
+            conf->method = to_string(value);
+        } else if (strcmp(name, "timeout") == 0) {
+            conf->timeout = to_string(value);
+        } else if (strcmp(name, "user") == 0) {
+            conf->user = to_string(value);
+        } else if (strcmp(name, "plugin") == 0) {
+            conf->plugin = to_string(value);
+            if (conf->plugin && strlen(conf->plugin) == 0) {
+                ss_free(conf->plugin);
+                conf->plugin = NULL;
+            }
+        } else if (strcmp(name, "plugin_opts") == 0) {
+            conf->plugin_opts = to_string(value);
+        } else if (strcmp(name, "fast_open") == 0) {
+            check_json_value_type(value, json_boolean,
+                    "invalid config file: option 'fast_open' must be a boolean");
+            conf->fast_open = value->u.boolean;
+        } else if (strcmp(name, "reuse_port") == 0) {
+            check_json_value_type(value, json_boolean,
+                    "invalid config file: option 'reuse_port' must be a boolean");
+            conf->reuse_port = value->u.boolean;
+        } else if (strcmp(name, "auth") == 0) {
+            FATAL("One time auth has been deprecated. Try AEAD ciphers instead.");
+        } else if (strcmp(name, "nofile") == 0) {
+            check_json_value_type(value, json_integer,
+                    "invalid config file: option 'nofile' must be an integer");
+            conf->nofile = value->u.integer;
+        } else if (strcmp(name, "nameserver") == 0) {
+            conf->nameserver = to_string(value);
+        } else if (strcmp(name, "dscp") == 0) {
+            if (value->type == json_object) {
+                for (j = 0; j < value->u.object.length; j++) {
+                    if (j >= MAX_DSCP_NUM) {
+                        break;
+                    }
+                    json_value *v = value->u.object.values[j].value;
+                    if (v->type == json_string) {
+                        int dscp   = parse_dscp(to_string(v));
+                        char *port = ss_strndup(value->u.object.values[j].name,
+                                value->u.object.values[j].name_length);
+                        conf->dscp[j].port = port;
+                        conf->dscp[j].dscp = dscp;
+                        conf->dscp_num     = j + 1;
+                    }
+                }
+            }
+        } else if (strcmp(name, "tunnel_address") == 0) {
+            conf->tunnel_address = to_string(value);
+        } else if (strcmp(name, "mode") == 0) {
+            char *mode_str = to_string(value);
+
+            if (mode_str == NULL)
+                conf->mode = TCP_ONLY;
+            else if (strcmp(mode_str, "tcp_only") == 0)
+                conf->mode = TCP_ONLY;
+            else if (strcmp(mode_str, "tcp_and_udp") == 0)
+                conf->mode = TCP_AND_UDP;
+            else if (strcmp(mode_str, "udp_only") == 0)
+                conf->mode = UDP_ONLY;
+            else
+                LOGI("ignore unknown mode: %s, use tcp_only as fallback",
+                        mode_str);
+
+            ss_free(mode_str);
+        } else if (strcmp(name, "mtu") == 0) {
+            check_json_value_type(value, json_integer,
+                    "invalid config file: option 'mtu' must be an integer");
+            conf->mtu = value->u.integer;
+        } else if (strcmp(name, "mptcp") == 0) {
+            check_json_value_type(value, json_boolean,
+                    "invalid config file: option 'mptcp' must be a boolean");
+            conf->mptcp = value->u.boolean;
+        } else if (strcmp(name, "ipv6_first") == 0) {
+            check_json_value_type(value, json_boolean,
+                    "invalid config file: option 'ipv6_first' must be a boolean");
+            conf->ipv6_first = value->u.boolean;
+#ifdef HAS_SYSLOG
+        } else if (strcmp(name, "use_syslog") == 0) {
+            check_json_value_type(value, json_boolean,
+                    "invalid config file: option 'use_syslog' must be a boolean");
+            use_syslog = value->u.boolean;
+#endif
+        } else if (strcmp(name, "no_delay") == 0) {
+            check_json_value_type(
+                    value, json_boolean,
+                    "invalid config file: option 'no_delay' must be a boolean");
+            conf->no_delay = value->u.boolean;
+        } else if (strcmp(name, "workdir") == 0) {
+            conf->workdir = to_string(value);
+        } else if (strcmp(name, "acl") == 0) {
+            conf->acl = to_string(value);
+        }
+    }
+}
+
 jconf_t *
 read_jconf(const char *file)
 {
@@ -201,149 +349,7 @@ read_jconf(const char *file)
     }
 
     if (obj->type == json_object) {
-        unsigned int i, j;
-        for (i = 0; i < obj->u.object.length; i++) {
-            char *name        = obj->u.object.values[i].name;
-            json_value *value = obj->u.object.values[i].value;
-            if (strcmp(name, "server") == 0) {
-                if (value->type == json_array) {
-                    for (j = 0; j < value->u.array.length; j++) {
-                        if (j >= MAX_REMOTE_NUM) {
-                            break;
-                        }
-                        json_value *v  = value->u.array.values[j];
-                        char *addr_str = to_string(v);
-                        parse_addr(addr_str, conf.remote_addr + j);
-                        ss_free(addr_str);
-                        conf.remote_num = j + 1;
-                    }
-                } else if (value->type == json_string) {
-                    parse_addr(to_string(value), conf.remote_addr);
-                    conf.remote_num = 1;
-                }
-            } else if (strcmp(name, "port_password") == 0) {
-                if (value->type == json_object) {
-                    for (j = 0; j < value->u.object.length; j++) {
-                        if (j >= MAX_PORT_NUM) {
-                            break;
-                        }
-                        json_value *v = value->u.object.values[j].value;
-                        if (v->type == json_string) {
-                            conf.port_password[j].port = ss_strndup(value->u.object.values[j].name,
-                                                                    value->u.object.values[j].name_length);
-                            conf.port_password[j].password = to_string(v);
-                            conf.port_password_num         = j + 1;
-                        }
-                    }
-                }
-            } else if (strcmp(name, "server_port") == 0) {
-                conf.remote_port = to_string(value);
-            } else if (strcmp(name, "local_address") == 0) {
-                conf.local_addr = to_string(value);
-            } else if (strcmp(name, "local_ipv4_address") == 0) {
-                conf.local_addr_v4 = to_string(value);
-            } else if (strcmp(name, "local_ipv6_address") == 0) {
-                conf.local_addr_v6 = to_string(value);
-            } else if (strcmp(name, "local_port") == 0) {
-                conf.local_port = to_string(value);
-            } else if (strcmp(name, "password") == 0) {
-                conf.password = to_string(value);
-            } else if (strcmp(name, "key") == 0) {
-                conf.key = to_string(value);
-            } else if (strcmp(name, "method") == 0) {
-                conf.method = to_string(value);
-            } else if (strcmp(name, "timeout") == 0) {
-                conf.timeout = to_string(value);
-            } else if (strcmp(name, "user") == 0) {
-                conf.user = to_string(value);
-            } else if (strcmp(name, "plugin") == 0) {
-                conf.plugin = to_string(value);
-                if (conf.plugin && strlen(conf.plugin) == 0) {
-                    ss_free(conf.plugin);
-                    conf.plugin = NULL;
-                }
-            } else if (strcmp(name, "plugin_opts") == 0) {
-                conf.plugin_opts = to_string(value);
-            } else if (strcmp(name, "fast_open") == 0) {
-                check_json_value_type(value, json_boolean,
-                                      "invalid config file: option 'fast_open' must be a boolean");
-                conf.fast_open = value->u.boolean;
-            } else if (strcmp(name, "reuse_port") == 0) {
-                check_json_value_type(value, json_boolean,
-                                      "invalid config file: option 'reuse_port' must be a boolean");
-                conf.reuse_port = value->u.boolean;
-            } else if (strcmp(name, "auth") == 0) {
-                FATAL("One time auth has been deprecated. Try AEAD ciphers instead.");
-            } else if (strcmp(name, "nofile") == 0) {
-                check_json_value_type(value, json_integer,
-                                      "invalid config file: option 'nofile' must be an integer");
-                conf.nofile = value->u.integer;
-            } else if (strcmp(name, "nameserver") == 0) {
-                conf.nameserver = to_string(value);
-            } else if (strcmp(name, "dscp") == 0) {
-                if (value->type == json_object) {
-                    for (j = 0; j < value->u.object.length; j++) {
-                        if (j >= MAX_DSCP_NUM) {
-                            break;
-                        }
-                        json_value *v = value->u.object.values[j].value;
-                        if (v->type == json_string) {
-                            int dscp   = parse_dscp(to_string(v));
-                            char *port = ss_strndup(value->u.object.values[j].name,
-                                                    value->u.object.values[j].name_length);
-                            conf.dscp[j].port = port;
-                            conf.dscp[j].dscp = dscp;
-                            conf.dscp_num     = j + 1;
-                        }
-                    }
-                }
-            } else if (strcmp(name, "tunnel_address") == 0) {
-                conf.tunnel_address = to_string(value);
-            } else if (strcmp(name, "mode") == 0) {
-                char *mode_str = to_string(value);
-
-                if (mode_str == NULL)
-                    conf.mode = TCP_ONLY;
-                else if (strcmp(mode_str, "tcp_only") == 0)
-                    conf.mode = TCP_ONLY;
-                else if (strcmp(mode_str, "tcp_and_udp") == 0)
-                    conf.mode = TCP_AND_UDP;
-                else if (strcmp(mode_str, "udp_only") == 0)
-                    conf.mode = UDP_ONLY;
-                else
-                    LOGI("ignore unknown mode: %s, use tcp_only as fallback",
-                         mode_str);
-
-                ss_free(mode_str);
-            } else if (strcmp(name, "mtu") == 0) {
-                check_json_value_type(value, json_integer,
-                                      "invalid config file: option 'mtu' must be an integer");
-                conf.mtu = value->u.integer;
-            } else if (strcmp(name, "mptcp") == 0) {
-                check_json_value_type(value, json_boolean,
-                                      "invalid config file: option 'mptcp' must be a boolean");
-                conf.mptcp = value->u.boolean;
-            } else if (strcmp(name, "ipv6_first") == 0) {
-                check_json_value_type(value, json_boolean,
-                                      "invalid config file: option 'ipv6_first' must be a boolean");
-                conf.ipv6_first = value->u.boolean;
-#ifdef HAS_SYSLOG
-            } else if (strcmp(name, "use_syslog") == 0) {
-                check_json_value_type(value, json_boolean,
-                                      "invalid config file: option 'use_syslog' must be a boolean");
-                use_syslog = value->u.boolean;
-#endif
-            } else if (strcmp(name, "no_delay") == 0) {
-                check_json_value_type(
-                    value, json_boolean,
-                    "invalid config file: option 'no_delay' must be a boolean");
-                conf.no_delay = value->u.boolean;
-            } else if (strcmp(name, "workdir") == 0) {
-                conf.workdir = to_string(value);
-            } else if (strcmp(name, "acl") == 0) {
-                conf.acl = to_string(value);
-            }
-        }
+        parse_object(obj, &conf);
     } else {
         FATAL("Invalid config file");
     }
